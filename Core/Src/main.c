@@ -7,6 +7,8 @@
   *
   * Copyright (c) Danila Demidov
   */
+#include <stdio.h>
+
 #include "main.h"
 
 #include "stm32f3_discovery.h"
@@ -14,10 +16,6 @@
 #include "stm32f3_discovery_gyroscope.h"
 
 TIM_HandleTypeDef htim1;
-
-/* USER CODE BEGIN PV */
-
-/* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
@@ -48,12 +46,15 @@ int main(void) {
   BSP_LED_Init(LED10);
   BSP_LED_Init(LED8);
   BSP_LED_Init(LED6);
-  MX_TIM1_Init();
+  //MX_TIM1_Init();
 
+  BSP_LED_Toggle(LED6);
   if(BSP_GYRO_Init() != HAL_OK) {
+    BSP_LED_Toggle(LED3);
     Error_Handler();
   }
   if(BSP_ACCELERO_Init() != HAL_OK) {
+    BSP_LED_Toggle(LED3);
     Error_Handler();
   }
 
@@ -61,6 +62,31 @@ int main(void) {
   while (1) {
     HAL_Delay(1000);
     BSP_LED_Toggle(LED4);
+    /* Gyroscope variable */
+    float Buffer[3];
+    float Xval, Yval, Zval = 0x00;
+
+    /* Read Gyro Angular data */
+    BSP_GYRO_GetXYZ(Buffer);
+    /* Update autoreload and capture compare registers value*/
+    Xval = Buffer[0];
+    Yval = Buffer[1];
+    Zval = Buffer[2];
+
+    printf("Gyro: {%f, %f, %f}\t\t\t", Xval, Yval, Zval);
+
+    int16_t buffer[3] = {0};
+    int16_t xval, yval, zval = 0x00;
+
+    /* Read Acceleration*/
+    BSP_ACCELERO_GetXYZ(buffer);
+
+    /* Update autoreload and capture compare registers value*/
+    xval = buffer[0];
+    yval = buffer[1];
+    zval = buffer[2];
+
+    printf("Acc: {%d, %d, %d}\r\n", xval, yval, zval);
   }
 
 }
@@ -100,8 +126,7 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_I2C1|RCC_PERIPHCLK_TIM1;
-  PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_SYSCLK;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_TIM1;
   PeriphClkInit.Tim1ClockSelection = RCC_TIM1CLK_HCLK;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
     Error_Handler();
@@ -203,12 +228,6 @@ static void MX_GPIO_Init(void) {
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOE, CS_I2C_SPI_Pin|LD4_Pin|LD3_Pin|LD5_Pin
-                          |LD7_Pin|LD9_Pin|LD10_Pin|LD8_Pin
-                          |LD6_Pin, GPIO_PIN_RESET);
-
 }
 
 /**
