@@ -1,0 +1,48 @@
+E-compass/accelerometer MEMS (ST MEMS LSM303DLHC)
+
+The LSM303DLHC is an ultra-compact low-power system-in-package featuring a 3D digital 
+linear acceleration sensor and a 3D digital magnetic sensor. It includes a sensing element 
+and an IC interface able to provide the measured acceleration to the external world through 
+I2C serial interface.
+The LSM303DLHC has dynamically user-selectable full scales of ±2g/±8g and is capable of 
+measuring acceleration, and a magnetic field full scale from ±1.3g to 8.1g with an output 
+data rate of 100 Hz or 400 Hz.
+The STM32F303VCT6 MCU controls this motion sensor through the I2C interface.
+
+
+I2C1
+SDA -> B7
+SCL -> B6
+
+RDY  -> E2
+INT0 -> E4
+INT1 -> E5
+
+
+Gyroscope MEMS (ST MEMS L3GD20)
+
+The L3GD20 is an ultra-compact, low-power, three-axis angular rate sensor. It includes a 
+sensing element and an IC interface able to provide the measured angular rate to the 
+external world through the I2C/SPI serial interface.
+The L3GD20 has dynamically user-selectable full scales of ±250 dps/±500 dps/±2000 dps 
+and is capable of measuring rates.
+The STM32F303VCT6 MCU controls this motion sensor through the SPI interface.
+
+
+SPI1
+GPIO:
+SCK   --> A5
+MOSI  --> A7
+MISO  --> A6
+CS    --> E3
+
+INT0  --> E0
+INT1  --> E1
+
+
+PWM (servo) 
+The typical RC servo expects to see a pulse every 20 ms, however this can vary within a wide range that differs from servo to servo. The width of the pulse will determine how far the motor turns. For example, in many RC servos a 1.5 ms pulse will make the motor turn to the 90° position (neutral position). The low time (and the total period) can vary over a wide range, and vary from one pulse to the next, without any effect on the position of the servo motor.
+
+PWM ch1 -> A8
+PWM ch2 -> A9
+

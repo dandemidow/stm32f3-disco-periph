@@ -21,6 +21,8 @@ TIM_HandleTypeDef htim1;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
+static void BSP_PWM_Set(uint32_t const duty, uint32_t const channel);
+static void BSP_PWM_SetPulse(uint32_t const duty, uint32_t const channel);
 
 extern void initialise_monitor_handles(void);
 
@@ -46,7 +48,18 @@ int main(void) {
   BSP_LED_Init(LED10);
   BSP_LED_Init(LED8);
   BSP_LED_Init(LED6);
-  //MX_TIM1_Init();
+  MX_TIM1_Init();
+
+  if (HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1) != HAL_OK) {
+    /* PWM Generation Error */
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2) != HAL_OK) {
+    /* PWM Generation Error */
+    Error_Handler();
+  }
+
+  HAL_Delay(100);
 
   BSP_LED_Toggle(LED6);
   if(BSP_GYRO_Init() != HAL_OK) {
@@ -58,13 +71,50 @@ int main(void) {
     Error_Handler();
   }
 
+  HAL_Delay(5000);
+
   /* Infinite loop */
+  uint32_t duty1 = 50;
+  uint32_t duty2 = 50;
+  int dir1 = 0;
+  int dir2 = 1;
+  int meas_data_counter = 0;
   while (1) {
-    HAL_Delay(1000);
+    if (dir1 != 0) {
+      BSP_PWM_SetPulse(duty1, TIM_CHANNEL_1);
+    }
+
+    if (dir2 != 0) {
+      BSP_PWM_SetPulse(duty2, TIM_CHANNEL_2);
+    }
+    duty1 += dir1;
+    if (duty1 == 0) {
+      dir1 = 1;
+    } else if (duty1 >= 100) {
+      dir1 = -1;
+    }
+    duty2 += dir2;
+    if (duty2 == 0) {
+      dir2 = 1;
+      BSP_LED_On(LED8);
+    } else if (duty2 >= 100) {
+      dir2 = -1;
+      BSP_LED_Off(LED8);
+    }
     BSP_LED_Toggle(LED4);
     /* Gyroscope variable */
     float Buffer[3];
     float Xval, Yval, Zval = 0x00;
+    int16_t buffer[3] = {0};
+    int16_t xval, yval, zval = 0x00;
+
+    /* Read Acceleration*/
+    BSP_ACCELERO_GetXYZ(buffer);
+    /* Update autoreload and capture compare registers value*/
+    xval = buffer[0];
+    yval = buffer[1];
+    zval = buffer[2];
+
 
     /* Read Gyro Angular data */
     BSP_GYRO_GetXYZ(Buffer);
@@ -73,22 +123,13 @@ int main(void) {
     Yval = Buffer[1];
     Zval = Buffer[2];
 
-    printf("Gyro: {%f, %f, %f}\t\t\t", Xval, Yval, Zval);
-
-    int16_t buffer[3] = {0};
-    int16_t xval, yval, zval = 0x00;
-
-    /* Read Acceleration*/
-    BSP_ACCELERO_GetXYZ(buffer);
-
-    /* Update autoreload and capture compare registers value*/
-    xval = buffer[0];
-    yval = buffer[1];
-    zval = buffer[2];
-
-    printf("Acc: {%d, %d, %d}\r\n", xval, yval, zval);
+    if (meas_data_counter++ % 2 == 0) {
+      printf("%d; %d; %d; ", (int)(Xval/20.F), (int)(Yval/20.F), (int)(Zval/20.F));
+      printf("%d; %d; %d\r\n", xval, yval, zval);
+    } else {
+      HAL_Delay(2);
+    }
   }
-
 }
 
 /**
@@ -133,6 +174,38 @@ void SystemClock_Config(void)
   }
 }
 
+uint32_t kPeriodValue = (uint32_t)(479 - 1);
+
+static void BSP_PWM_SetPulse(uint32_t const duty, uint32_t const channel) {
+  float const kMinPercent = 5.F;
+  float const kMaxPercent = 10.F;
+  float const kRange = kMaxPercent - kMinPercent;
+  float const coef = kMinPercent + (duty * kRange) / 100.F;
+  uint32_t const pulse = (uint32_t)((kPeriodValue * coef) / 100);
+
+  __HAL_TIM_SET_COMPARE(&htim1, channel, pulse);
+}
+
+// duty: [800, 2200] <- 100 percet range
+static void BSP_PWM_Set(uint32_t const duty, uint32_t const channel) {
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  float const kMinPercent = 5.F;
+  float const kMaxPercent = 10.F;
+  float const kRange = kMaxPercent - kMinPercent;
+  float const coef = kMinPercent + (duty * kRange) / 100.F;
+
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = (uint32_t)((kPeriodValue * coef) / 100);
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, channel) != HAL_OK) {
+    Error_Handler();
+  }
+}
 
 
 /**
@@ -140,39 +213,29 @@ void SystemClock_Config(void)
   * @param None
   * @retval None
   */
-static void MX_TIM1_Init(void)
-{
-
-  /* USER CODE BEGIN TIM1_Init 0 */
-
-  /* USER CODE END TIM1_Init 0 */
-
+static void MX_TIM1_Init(void) {
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
-  /* USER CODE BEGIN TIM1_Init 1 */
+//  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
-  /* USER CODE END TIM1_Init 1 */
+  uint32_t uhPrescalerValue = (uint32_t)(SystemCoreClock / 24000) - 1;
+
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 2;
+  htim1.Init.Prescaler = uhPrescalerValue;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 6553;
-  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV2;
+  htim1.Init.Period = kPeriodValue;
+  htim1.Init.ClockDivision = 0;
   htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
-  {
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK) {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
@@ -182,37 +245,27 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 0;
-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.BreakFilter = 0;
-  sBreakDeadTimeConfig.Break2State = TIM_BREAK2_DISABLE;
-  sBreakDeadTimeConfig.Break2Polarity = TIM_BREAK2POLARITY_HIGH;
-  sBreakDeadTimeConfig.Break2Filter = 0;
-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM1_Init 2 */
 
-  /* USER CODE END TIM1_Init 2 */
+  BSP_PWM_Set(50U, TIM_CHANNEL_1);
+  BSP_PWM_Set(50U, TIM_CHANNEL_2);
+
+//  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+//  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+//  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+//  sBreakDeadTimeConfig.DeadTime = 0;
+//  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+//  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+//  sBreakDeadTimeConfig.BreakFilter = 0;
+//  sBreakDeadTimeConfig.Break2State = TIM_BREAK2_DISABLE;
+//  sBreakDeadTimeConfig.Break2Polarity = TIM_BREAK2POLARITY_HIGH;
+//  sBreakDeadTimeConfig.Break2Filter = 0;
+//  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+//  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
+//  {
+//    Error_Handler();
+//  }
+
   HAL_TIM_MspPostInit(&htim1);
-
 }
 
 
