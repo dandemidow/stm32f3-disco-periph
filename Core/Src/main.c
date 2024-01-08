@@ -8,6 +8,7 @@
   * Copyright (c) Danila Demidov
   */
 #include <stdio.h>
+#include <math.h>
 
 #include "main.h"
 
@@ -16,15 +17,119 @@
 #include "stm32f3_discovery_gyroscope.h"
 
 TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim2;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_TIM2_Init(void);
 static void BSP_PWM_Set(uint32_t const duty, uint32_t const channel);
 static void BSP_PWM_SetPulse(uint32_t const duty, uint32_t const channel);
 
+static void SampleGyroData();
+
 extern void initialise_monitor_handles(void);
+
+struct AxisInfo {
+  float position;
+  float offset;
+  uint32_t calibration;
+  float *buffer;
+  uint32_t index;
+};
+#define kBufSize 500U
+#define kCalibrationSamples 250U
+
+float test_buffer[kBufSize] = {0};
+float test_buffer_y[kBufSize] = {0};
+static struct AxisInfo x_axis = {0.F, 0.009924F, kCalibrationSamples, &test_buffer[0], 0U};
+static struct AxisInfo y_axis = {0.F, -0.022529F, kCalibrationSamples, &test_buffer_y[0], 0U};
+//LED_GREEN  = LED6,
+//LED_ORANGE = LED5,
+//LED_RED    = LED3,
+//LED_BLUE   = LED4,
+//LED_GREEN_2  = LED7,
+//LED_ORANGE_2 = LED8,
+//LED_RED_2    = LED10,
+//LED_BLUE_2   = LED9
+static Led_TypeDef leds[] = {LED_RED, LED_BLUE, LED_GREEN, LED_ORANGE_2, LED_RED_2, LED_BLUE_2, LED_GREEN_2, LED_ORANGE};
+
+typedef enum {
+  k0Pi,
+  kPi_2,
+  kPi,
+  k3Pi_2,
+  k2Pi
+} period_t;
+
+typedef struct {
+  int duty;
+  int dir;
+  uint32_t channel;
+  uint32_t count;
+  uint32_t div;
+  int enable;
+  int old_dir;
+} harm_t;
+
+inline void EnableSignal(harm_t *signal) {
+  signal->enable = 1;
+}
+
+inline void DisableSignal(harm_t *signal) {
+  signal->enable = 0;
+}
+
+inline void StartSignal(harm_t *signal) {
+  signal->dir = signal->old_dir;
+
+}
+
+inline void StopSignal(harm_t *signal) {
+  signal->old_dir = signal->dir;
+  signal->dir = 0;
+}
+
+period_t HarmDuty(harm_t *signal) {
+    if (!signal->enable || !signal->dir) {
+      return k0Pi;
+    }
+    signal->duty += signal->dir;
+    period_t result = k0Pi;
+    switch (signal->duty / signal->div) {
+    case 0: {
+        signal->dir = 1;
+        result = k3Pi_2;
+      };
+      break;
+    case 50: {
+        if (signal->dir > 0) {
+          result = k2Pi;
+        } else {
+          result = kPi;
+        }
+      };
+      break;
+    case 100: {
+        signal->dir = -1;
+        result = kPi_2;
+      };
+      break;
+    }
+    return result;
+}
+
+void SetDuty(harm_t *signal) {
+  if (signal->enable == 1) {
+    if (signal->dir != 0) {
+      BSP_PWM_SetPulse(signal->duty / signal->div, signal->channel);
+      HAL_Delay(1);
+    }
+  } else {
+    BSP_PWM_SetPulse(50, signal->channel);
+  }
+}
 
 /**
   * @brief  The application entry point.
@@ -49,6 +154,8 @@ int main(void) {
   BSP_LED_Init(LED8);
   BSP_LED_Init(LED6);
   MX_TIM1_Init();
+  MX_TIM2_Init();
+  HAL_TIM_RegisterCallback(&htim2, HAL_TIM_OC_DELAY_ELAPSED_CB_ID, &SampleGyroData);
 
   if (HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1) != HAL_OK) {
     /* PWM Generation Error */
@@ -61,55 +168,90 @@ int main(void) {
 
   HAL_Delay(100);
 
-  BSP_LED_Toggle(LED6);
   if(BSP_GYRO_Init() != HAL_OK) {
-    BSP_LED_Toggle(LED3);
     Error_Handler();
   }
   if(BSP_ACCELERO_Init() != HAL_OK) {
-    BSP_LED_Toggle(LED3);
+    Error_Handler();
+  }
+
+  if (HAL_TIM_OC_Start_IT(&htim2, TIM_CHANNEL_1) != HAL_OK) {
     Error_Handler();
   }
 
   HAL_Delay(5000);
 
   /* Infinite loop */
-  uint32_t duty1 = 50;
-  uint32_t duty2 = 50;
-  int dir1 = 0;
-  int dir2 = 1;
-  int meas_data_counter = 0;
+  harm_t signal_1 = {50, 1, TIM_CHANNEL_1, 0, 1U, 1, 1};
+  harm_t signal_2 = {50, 0, TIM_CHANNEL_2, 0, 1U, 1, 1};
+  Led_TypeDef led_index = 0;
+  period_t period;
   while (1) {
-    if (dir1 != 0) {
-      BSP_PWM_SetPulse(duty1, TIM_CHANNEL_1);
+    if (x_axis.calibration != 0U) {
+        HAL_Delay(2);
+        continue;
+    }
+    BSP_LED_Toggle(led_index);
+    led_index = (led_index + 1) % 8U;
+
+    SetDuty(&signal_1);
+    SetDuty(&signal_2);
+
+    period = HarmDuty(&signal_1);
+    if (signal_1.count == 0) {
+      if (period == kPi_2 || period == kPi || period == k3Pi_2) {
+        StopSignal(&signal_1);
+//        printf("signal 01 %d\r\n", period);
+        StartSignal(&signal_2);
+      }
+      if (period == k2Pi) {
+        signal_1.count++;
+//        printf("signal 1: %d;\r\n", signal_1.count);
+        StopSignal(&signal_1);
+        StartSignal(&signal_2);
+      }
+    } else {
+      if (period == k2Pi) {
+        signal_1.count++;
+//        printf("signal 1: %d;\r\n", signal_1.count);
+        StopSignal(&signal_1);
+        StartSignal(&signal_2);
+      }
     }
 
-    if (dir2 != 0) {
-      BSP_PWM_SetPulse(duty2, TIM_CHANNEL_2);
+    period = HarmDuty(&signal_2);
+    if (signal_2.count == 0) {
+      if (period == kPi_2 || period == kPi || period == k3Pi_2) {
+//        printf("signal 02 %d\r\n", period);
+        StopSignal(&signal_2);
+        StartSignal(&signal_1);
+      }
+      if (period == k2Pi) {
+        signal_2.count++;
+//        printf("signal 2: %d;\r\n", signal_2.count);
+        StopSignal(&signal_2);
+        StartSignal(&signal_1);
+      }
+    } else {
+      if (period == k2Pi) {
+        signal_2.count++;
+//        printf("signal 2: %d;\r\n", signal_2.count);
+        if (signal_2.count % 2 == 1) {
+          StopSignal(&signal_2);
+          StartSignal(&signal_1);
+        }
+      }
     }
-    duty1 += dir1;
-    if (duty1 == 0) {
-      dir1 = 1;
-    } else if (duty1 >= 100) {
-      dir1 = -1;
-    }
-    duty2 += dir2;
-    if (duty2 == 0) {
-      dir2 = 1;
-      BSP_LED_On(LED8);
-    } else if (duty2 >= 100) {
-      dir2 = -1;
-      BSP_LED_Off(LED8);
-    }
-    BSP_LED_Toggle(LED4);
+
+
     /* Gyroscope variable */
-    float Buffer[3];
-    float Xval, Yval, Zval = 0x00;
+//    float Buffer[3];
+//    float Xval, Yval, Zval = 0x00;
     int16_t buffer[3] = {0};
     int16_t xval, yval, zval = 0x00;
 
     /* Read Acceleration*/
-    BSP_ACCELERO_GetXYZ(buffer);
+    //BSP_ACCELERO_GetXYZ(buffer);
     /* Update autoreload and capture compare registers value*/
     xval = buffer[0];
     yval = buffer[1];
@@ -117,18 +259,56 @@ int main(void) {
 
 
     /* Read Gyro Angular data */
-    BSP_GYRO_GetXYZ(Buffer);
+//    BSP_GYRO_GetXYZ(Buffer);
     /* Update autoreload and capture compare registers value*/
-    Xval = Buffer[0];
-    Yval = Buffer[1];
-    Zval = Buffer[2];
+//    Xval = Buffer[0];
+//    Yval = Buffer[1];
+//    Zval = Buffer[2];
 
-    if (meas_data_counter++ % 2 == 0) {
-      printf("%d; %d; %d; ", (int)(Xval/20.F), (int)(Yval/20.F), (int)(Zval/20.F));
-      printf("%d; %d; %d\r\n", xval, yval, zval);
+    if (x_axis.index >= kBufSize) {
+//      printf("%d; %d; %d; ", (int)(Xval/20.F), (int)(Yval/20.F), (int)(Zval/20.F));
+      printf("offset x: %f; y: %f\r\n", x_axis.offset, y_axis.offset);
+      for (int i = 0; i < x_axis.index; i++) {
+        printf("%f; %f\r\n", x_axis.buffer[i], y_axis.buffer[i]);
+      }
+      printf("==========\r\n");
+      x_axis.index = 0U;
+      x_axis.buffer = NULL;
+      DisableSignal(&signal_1);
+      DisableSignal(&signal_2);
+      //printf("%d; %d; %d\r\n", xval, yval, zval);
     } else {
       HAL_Delay(2);
     }
+  }
+}
+
+static inline void CalcPosition(struct AxisInfo *axis, float const gyro) {
+  float const delta = 0.00002F * gyro - axis->offset;
+  if (fabs(delta) > 0.005F) {
+    axis->position += delta;
+  }
+  if (axis->index < kBufSize && axis->buffer) {
+    axis->buffer[axis->index] = axis->position;
+    axis->index++;
+  }
+}
+
+/**
+ * @brief SampleGyroData
+ */
+static void SampleGyroData() {
+  float Buffer[3];
+  BSP_GYRO_GetXYZ(Buffer);
+  if (x_axis.calibration > 0U) {
+    x_axis.calibration--;
+//    x_axis.offset += 0.00002F * Buffer[1];
+//    x_axis.offset /= 2.F;
+//    y_axis.offset += 0.00002F * Buffer[0];
+//    y_axis.offset /= 2.F;
+  } else {
+    CalcPosition(&x_axis, Buffer[1]);
+    CalcPosition(&y_axis, Buffer[0]);
   }
 }
 
@@ -136,8 +316,7 @@ int main(void) {
   * @brief System Clock Configuration
   * @retval None
   */
-void SystemClock_Config(void)
-{
+void SystemClock_Config(void) {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
@@ -186,7 +365,7 @@ static void BSP_PWM_SetPulse(uint32_t const duty, uint32_t const channel) {
   __HAL_TIM_SET_COMPARE(&htim1, channel, pulse);
 }
 
-// duty: [800, 2200] <- 100 percet range
+// duty: [1000, 2000] <- 100 percet range
 static void BSP_PWM_Set(uint32_t const duty, uint32_t const channel) {
   TIM_OC_InitTypeDef sConfigOC = {0};
 
@@ -266,6 +445,54 @@ static void MX_TIM1_Init(void) {
 //  }
 
   HAL_TIM_MspPostInit(&htim1);
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void) {
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+//  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  uint32_t uhPrescalerValue = (uint32_t)(SystemCoreClock / 24000) - 1;
+
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = uhPrescalerValue;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = kPeriodValue;
+  htim2.Init.ClockDivision = 0;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+//  if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {}
+  if (HAL_TIM_OC_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK) {
+    Error_Handler();
+  }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+//  sConfigOC.OCMode = TIM_OCMODE_TIMING;
+//  sConfigOC.Pulse = 0;
+//  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+//  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+//  if (HAL_TIM_OC_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
+//    Error_Handler();
+//  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+
 }
 
 
