@@ -151,7 +151,21 @@ void SysTick_Handler(void) {
 /* For the available peripheral interrupt handler names,                      */
 /* please refer to the startup file (startup_stm32f3xx.s).                    */
 /******************************************************************************/
+/**
+  * @brief This function handles DMA1 channel6 global interrupt.
+  */
+void DMA1_Channel6_IRQHandler(void) {
+  extern DMA_HandleTypeDef hdma_usart2_rx;
+  HAL_DMA_IRQHandler(&hdma_usart2_rx);
+}
 
+/**
+  * @brief This function handles DMA1 channel7 global interrupt.
+  */
+void DMA1_Channel7_IRQHandler(void) {
+  extern DMA_HandleTypeDef hdma_usart2_tx;
+  HAL_DMA_IRQHandler(&hdma_usart2_tx);
+}
 /**
   * @brief This function handles TIM2 global interrupt.
   */
@@ -159,3 +173,12 @@ void TIM2_IRQHandler(void) {
   extern TIM_HandleTypeDef htim2;
   HAL_TIM_IRQHandler(&htim2);
 }
+
+/**
+  * @brief This function handles USART2 global interrupt / USART2 wake-up interrupt through EXTI line 26.
+  */
+void USART2_IRQHandler(void) {
+  extern UART_HandleTypeDef huart;
+  HAL_UART_IRQHandler(&huart);
+}
+
