@@ -39,7 +39,8 @@ CPP_SOURCES =  \
 Core/Src/main.cpp \
 Core/Src/position.cpp \
 Core/Src/ubx_state_machine.cpp \
-Core/Src/tx_message.cpp
+Core/Src/tx_message.cpp \
+Core/Src/gyro_test.cpp
 
 # C sources
 C_SOURCES =  \
